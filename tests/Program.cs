@@ -39,7 +39,7 @@ var tests = new (string Name, Func<Fixture, Task> Run)[]
         Require(File.ReadAllText(Path.Combine(f.BackupDirectory, "FolderA.zip.part")) == "keep part", "Unrelated part changed");
         Require(File.ReadAllText(Path.Combine(f.BackupDirectory, "nested", "FolderA.zip")) == "keep nested", "Nested ZIP changed");
     }),
-    ("Delete-first order follows the revised spec", async f =>
+    ("Previous set survives until verification completes", async f =>
     {
         f.SeedOld();
         bool checkedOrder = false;
@@ -47,7 +47,7 @@ var tests = new (string Name, Func<Fixture, Task> Run)[]
         {
             if (p.Stage == "Compressing Folder A..." && !checkedOrder)
             {
-                Require(!File.Exists(f.ZipA) && !File.Exists(f.ZipB), "Old archives still exist before compression");
+                f.AssertOld();
                 checkedOrder = true;
             }
         };
@@ -114,7 +114,7 @@ var tests = new (string Name, Func<Fixture, Task> Run)[]
         await MustFail<IOException>(() => f.Backup());
         f.AssertOld();
     }),
-    ("Failure after old deletion never reports success", async f =>
+    ("Disconnection before transfer preserves previous set", async f =>
     {
         f.SeedOld();
         bool disconnected = false;
@@ -122,7 +122,7 @@ var tests = new (string Name, Func<Fixture, Task> Run)[]
         f.Check = () => { if (disconnected) throw new IOException("USB disconnected"); };
         await MustFail<IOException>(() => f.Backup());
         Require(!f.Progress.Any(p => p.Percent == 100), "Failure reported success");
-        Require(!File.Exists(f.ZipB), "Unexpected second archive");
+        f.AssertOld();
     }),
     ("Changed source fails and incomplete archive is removed", async f =>
     {
@@ -163,9 +163,12 @@ foreach (var test in tests)
     try { await test.Run(fixture); Console.WriteLine($"PASS {test.Name}"); passed++; }
     catch (UnauthorizedAccessException) when (test.Name.Contains("link", StringComparison.OrdinalIgnoreCase) || test.Name.Contains("Redirected"))
     { Console.WriteLine($"SKIP {test.Name}: enable Windows Developer Mode for symbolic-link tests."); skipped++; }
+    catch (IOException e) when ((e.HResult & 0xffff) == 1314 && (test.Name.Contains("link", StringComparison.OrdinalIgnoreCase) || test.Name.Contains("Redirected")))
+    { Console.WriteLine($"SKIP {test.Name}: Windows does not permit creating symbolic links (1314)."); skipped++; }
     catch (Exception e) { Console.WriteLine($"FAIL {test.Name}\n{e}"); failures++; }
 }
 Console.WriteLine($"\n{passed} passed, {failures} failed, {skipped} skipped.");
+failures += await DiagnosticsTests.Run();
 return failures == 0 ? 0 : 1;
 
 static void Require(bool condition, string message) { if (!condition) throw new Exception(message); }
@@ -190,7 +193,7 @@ sealed class Fixture : IProgress<BackupProgress>, IDisposable
     public Action Check { get; set; } = () => { };
     public Func<long> Free { get; set; } = () => 1024L * 1024 * 1024 * 1024;
     public Fixture() { Directory.CreateDirectory(A); Directory.CreateDirectory(B); Directory.CreateDirectory(Usb); }
-    public Task Backup() => new BackupService().RunAsync(A, B, Usb, "exFAT", Check, Free, this);
+    public Task Backup() => new BackupService { StagingRoot = Path.Combine(Root, "staging"), DiagnosticLog = _ => { } }.RunAsync(A, B, Usb, "exFAT", Check, Free, this);
     public void Report(BackupProgress value) { Progress.Add(value); OnProgress?.Invoke(value); }
     public void SeedOld() { Directory.CreateDirectory(BackupDirectory); File.WriteAllText(ZipA, "old A"); File.WriteAllText(ZipB, "old B"); }
     public void AssertOld()

@@ -135,6 +135,7 @@ public partial class MainWindow : Window
         operationStatus = true;
         UpdateControls();
         ErrorText.Visibility = Visibility.Collapsed;
+        DiagnosticsButton.Visibility = Visibility.Collapsed;
         BackupProgressBar.Value = 0;
         PercentText.Text = "0%";
         StatusText.Text = "Preparing...";
@@ -179,7 +180,7 @@ public partial class MainWindow : Window
         {
             error = ex.ToString();
             StatusText.Text = "Backup failed";
-            ActivityText.Text = "Check the problem below, then run the backup again.";
+            ActivityText.Text = "Verified local archives are retained in local-backups. View diagnostics for details.";
             ShowError(FriendlyError(ex, drive.Format));
         }
         finally
@@ -233,7 +234,7 @@ public partial class MainWindow : Window
             var text = new TextBox { Text = LogService.Read(), IsReadOnly = true, TextWrapping = TextWrapping.Wrap,
                 FontFamily = new FontFamily("Consolas"), FontSize = 12, Padding = new Thickness(18), BorderThickness = new Thickness(0),
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
-            new Window { Title = "USB Backup · Log", Owner = this, Width = 700, Height = 520, MinWidth = 400, MinHeight = 300,
+            new Window { Title = "USB Backup · Diagnostics", Owner = this, Width = 700, Height = 520, MinWidth = 400, MinHeight = 300,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = text, Icon = Icon }.ShowDialog();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { ShowError("The log could not be opened: " + ex.Message); }
@@ -244,9 +245,10 @@ public partial class MainWindow : Window
         if (busy) { e.Cancel = true; ShowError("Please wait for the current operation to finish before closing."); }
         else timer.Stop();
     }
-    private void ShowError(string text) { ErrorText.Text = text; ErrorText.Visibility = Visibility.Visible; }
+    private void ShowError(string text) { ErrorText.Text = text; ErrorText.Visibility = Visibility.Visible; DiagnosticsButton.Visibility = Visibility.Visible; }
     private static string FriendlyError(Exception e, string format) => e switch
     {
+        TransferException => e.Message + " Existing backups were preserved. View diagnostics for details.",
         UnauthorizedAccessException => "Access denied. Check folder permissions and USB write protection.",
         DirectoryNotFoundException => e.Message,
         InvalidDataException => "The ZIP could not be verified. Run the backup again. " + e.Message,

@@ -1,6 +1,6 @@
 # Test record and Windows checklist
 
-Use disposable test sources and a spare USB. Do not test deletion using real backups or arbitrary folders. The app intentionally deletes `Backup/FolderA.zip` and `Backup/FolderB.zip` first, as requested in the revised specification.
+Use disposable test sources and a spare USB. The app stages and verifies both archives before replacing existing backups. Never use valuable backups for hardware fault testing.
 
 ## Automated checks
 
@@ -8,29 +8,29 @@ Use disposable test sources and a spare USB. Do not test deletion using real bac
 dotnet run --project tests/SimpleUSBBackup.Tests.csproj -c Release
 ```
 
-Verified on macOS with .NET 8.0.425: **15 passed, 0 failed, 0 skipped**.
+Diagnostics update verified on Windows with .NET 8.0.425: **23 passed, 0 failed, 3 skipped**. The skipped tests require symbolic-link creation privilege.
 
 | Test | Result |
 | --- | --- |
 | Two sources, nested directories, Chinese names, spaces, empty directories; sources unchanged | PASS |
 | Only the two literal ZIP files replaced; unrelated files preserved | PASS |
-| Delete-first order before compression | PASS |
+| Previous backup pair remains intact during local compression and verification | PASS |
 | Empty sources create valid ZIPs | PASS |
 | Missing source fails before old ZIP deletion | PASS |
 | Missing/disconnected volume fails before old ZIP deletion | PASS |
 | Insufficient estimated space fails before old ZIP deletion | PASS |
 | Sources on selected destination rejected | PASS |
-| Backup-directory symlink cannot redirect deletion | PASS |
-| Archive-file symlink cannot redirect writes | PASS |
-| Source symlink fails before deletion | PASS |
-| Simulated disconnect after deletion does not report completion | PASS |
+| Backup-directory symlink cannot redirect deletion | SKIP: Windows privilege 1314 |
+| Archive-file symlink cannot redirect writes | SKIP: Windows privilege 1314 |
+| Source symlink fails before deletion | SKIP: Windows privilege 1314 |
+| Simulated disconnection preserves previous backups and never reports success | PASS |
 | Source changed after scan fails, incomplete archive removed | PASS |
 | 2,000 files preserved | PASS |
 | 32 MiB streaming file, byte progress and restored content hash match | PASS |
 
 Every fixture uses a unique temporary directory that it creates and removes. Windows symbolic-link tests may be skipped unless Developer Mode or the appropriate privilege is enabled. The simulated drive checks exercise control flow, not actual USB hardware.
 
-## Windows acceptance checks — not yet run
+## Windows acceptance checks
 
 - [ ] Launch the self-contained EXE on Windows 10 x64 without .NET installed.
 - [ ] Launch on Windows 11 x64; inspect 100%, 150%, and 200% display scaling, resizing, keyboard focus, and long paths.
@@ -43,11 +43,11 @@ Every fixture uses a unique temporary directory that it creates and removes. Win
 - [ ] Back up small sources; open/extract both ZIPs with Windows Explorer and compare contents.
 - [ ] Test Chinese filenames, spaces, nested empty folders, and thousands of files.
 - [ ] Test a large file on exFAT/NTFS and a ZIP exceeding the FAT32 limit on a disposable FAT32 drive.
-- [ ] Repeat backup with existing ZIPs; verify the old pair is deleted before compression and only the latest filenames remain.
+- [ ] Repeat backup with existing ZIPs; verify the old pair remains until both temporary USB copies pass verification.
 - [ ] Place unrelated root files, other ZIPs, and nested `FolderA.zip` files on the spare USB; verify all stay unchanged.
-- [ ] Use a nearly full USB; preflight failure leaves existing ZIPs untouched when the estimate cannot fit even after reclaiming the two targets.
+- [ ] Use a nearly full USB; preflight failure leaves existing ZIPs untouched when the new temporary pair cannot fit without reclaiming the existing targets.
 - [ ] Hold a source file open with sharing denied; get a readable failure and detailed log, without changing the source.
-- [ ] Hold either destination ZIP open with sharing denied; fail before deletion when the initial exclusive-open check detects it.
+- [ ] Hold either destination ZIP open with sharing denied; verify commit fails safely and preserves or restores the old pair.
 - [ ] Deny write access or enable write protection; show an error and keep the UI responsive.
 - [ ] Unplug during compression/writing; never show Backup Complete. Reconnect and retry successfully.
 - [ ] Try closing/changing folders/ejecting during backup; controls are disabled and closing is deferred.
@@ -59,7 +59,14 @@ Every fixture uses a unique temporary directory that it creates and removes. Win
 
 ## Build checks
 
-- WPF cross-build succeeded with zero warnings and errors.
+- WPF Windows build succeeded with zero warnings and errors.
 - Release self-contained publishing is performed for `win-x64`.
 - Icon source is original; ICO includes all seven requested/common sizes.
-- Cross-compilation and engine tests do **not** validate WPF rendering, Windows driver interactions, or real hardware removal.
+- The self-contained Windows x64 EXE launched and remained running with a USB Backup window. The in-app header uses vector shapes matching the original SVG.
+- Automated tests and launch smoke checks do **not** validate display scaling, Windows driver interactions, or physical USB reliability.
+
+## Transfer diagnostic tests
+
+All eleven passed with disposable local files: complete successful measurements; modified byte with offset and CRC failure; truncated copy; extra bytes; flush failure with Win32 code; read failure with Win32 code; matching invalid ZIP structure; matching bytes with invalid entry CRC; changed local archive blocked before copy; corrupted second USB copy preserves existing backups and verified local pair; ZIP64 central-directory validation with 65,536 entries.
+
+Verification uses fresh buffered Windows reads, not unbuffered physical-media reads. No physical USB was written or tested in this update, and no hardware-corruption fix is claimed.

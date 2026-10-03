@@ -1,4 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework></PropertyGroup>
   <ItemGroup><Compile Include="../BackupService.cs" Link="BackupService.cs" /></ItemGroup>
+  <ItemGroup>
+    <Compile Include="../TransferDiagnostics.cs" Link="TransferDiagnostics.cs" />
+    <Compile Include="../UsbService.cs" Link="UsbService.cs" />
+    <Compile Include="../LogService.cs" Link="LogService.cs" />
+    <Compile Include="../SettingsService.cs" Link="SettingsService.cs" />
+  </ItemGroup>
 </Project>

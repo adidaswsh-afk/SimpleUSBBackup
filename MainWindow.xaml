@@ -16,7 +16,17 @@
                     <TextBlock Text="USB Backup" FontSize="29" FontWeight="SemiBold" />
                     <TextBlock Text="Two folders. One simple backup." Foreground="{StaticResource Muted}" Margin="0,5,0,0" />
                 </StackPanel>
-                <Image Grid.Column="1" Source="Assets/app-icon.ico" Width="55" Height="55" Margin="12,0,0,0" />
+                <Viewbox Grid.Column="1" Width="55" Height="55" Margin="12,0,0,0" AutomationProperties.Name="USB Backup logo">
+                    <Canvas Width="256" Height="256">
+                        <Rectangle Canvas.Left="88" Canvas.Top="20" Width="80" Height="65" RadiusX="12" RadiusY="12" Fill="#BDCFDA" />
+                        <Rectangle Canvas.Left="104" Canvas.Top="32" Width="12" Height="23" RadiusX="3" RadiusY="3" Fill="#40536B" />
+                        <Rectangle Canvas.Left="140" Canvas.Top="32" Width="12" Height="23" RadiusX="3" RadiusY="3" Fill="#40536B" />
+                        <Rectangle Canvas.Left="57" Canvas.Top="69" Width="142" Height="168" RadiusX="35" RadiusY="35" Fill="#102C3C" />
+                        <Rectangle Canvas.Left="69" Canvas.Top="79" Width="118" Height="137" RadiusX="25" RadiusY="25" Fill="#147D79" />
+                        <Path Data="M116 107 H140 V149 H161 L128 181 L95 149 H116Z" Fill="#D2FFF0" />
+                        <Rectangle Canvas.Left="97" Canvas.Top="192" Width="62" Height="8" RadiusX="4" RadiusY="4" Fill="#67C9B4" />
+                    </Canvas>
+                </Viewbox>
             </Grid>
 
             <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,14">
@@ -80,6 +90,7 @@
                 </ProgressBar>
                 <TextBlock x:Name="ActivityText" Text="Select two source folders to get started." Foreground="{StaticResource Muted}" FontSize="12" Margin="0,9,0,0" TextTrimming="CharacterEllipsis" />
                 <TextBlock x:Name="ErrorText" TextWrapping="Wrap" Foreground="#AF3838" FontSize="12" Margin="0,7,0,0" Visibility="Collapsed" />
+                <Button x:Name="DiagnosticsButton" Content="View diagnostics" Click="Log_Click" HorizontalAlignment="Left" Margin="0,7,0,0" Visibility="Collapsed" />
             </StackPanel>
 
             <StackPanel Grid.Row="4">

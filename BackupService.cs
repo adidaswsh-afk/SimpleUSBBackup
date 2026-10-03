@@ -15,12 +15,14 @@ public sealed record SourcePlan(string Root, List<SourceEntry> Entries)
 
 public sealed class BackupService
 {
-    // Delegates keep the engine testable with controlled temporary folders, without a storage abstraction layer.
+    public string StagingRoot { get; init; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SimpleUSBBackup", "local-backups");
+    public Action<TransferDiagnostics> DiagnosticLog { get; init; } = d => LogService.Append(d.ToLog());
+    public ArchiveTransfer Transfer { get; init; } = new();
+
     public async Task RunAsync(string folderA, string folderB, string usbRoot, string format,
         Action checkDrive, Func<long> freeBytes, IProgress<BackupProgress> progress)
     {
         void Report(double value, string stage, string file = "") => progress.Report(new(value, stage, file));
-        Report(0, "Preparing...", "Checking folders and USB");
         checkDrive();
         foreach (string source in new[] { folderA, folderB })
             if (IsWithin(source, usbRoot) || IsWithin(usbRoot, source))
@@ -31,52 +33,103 @@ public sealed class BackupService
         Directory.CreateDirectory(destination);
         string[] paths = [Path.Combine(destination, "FolderA.zip"), Path.Combine(destination, "FolderB.zip")];
         foreach (string path in paths) RejectLinks(path);
-        long reclaimable = paths.Where(File.Exists).Sum(x => new FileInfo(x).Length);
         long estimate = checked(plans.Sum(x => x.EstimatedBytes) + 8 * 1024 * 1024);
-        if (checked(freeBytes() + reclaimable) < estimate)
-            throw new IOException($"Not enough USB space. About {FormatBytes(estimate)} is needed. The old backups have not been deleted.");
-        // Open both exact targets exclusively before deleting either, catching common lock/permission errors early.
-        var opened = new List<FileStream>();
+        if (freeBytes() < estimate) throw new IOException("Not enough USB space to safely stage the new backups. Existing backups were preserved.");
+        string staging = Path.Combine(StagingRoot, Guid.NewGuid().ToString("N"));
+        RejectLinks(staging);
+        Directory.CreateDirectory(staging);
+        string[] local = paths.Select(p => Path.Combine(staging, Path.GetFileName(p))).ToArray();
+        string[] verifiedHashes = new string[2];
+        string id = Guid.NewGuid().ToString("N");
+        string[] temporary = paths.Select(p => p + ".new-" + id).ToArray();
         try
         {
-            foreach (string path in paths)
-                if (File.Exists(path)) opened.Add(new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None));
-        }
-        finally { foreach (var stream in opened) stream.Dispose(); }
-
-        Report(5, "Deleting old backup...");
-        foreach (string path in paths)
-        {
+            for (int i = 0; i < 2; i++)
+            {
+                int index = i;
+                string stage = $"Compressing Folder {(i == 0 ? "A" : "B")}...";
+                Report(i == 0 ? 10 : 45, stage);
+                await CreateZipAsync(plans[i], local[i], () => { }, (ratio, file) =>
+                    Report((index == 0 ? 10 : 45) + 30 * ratio, stage, file));
+                Report(i == 0 ? 40 : 75, "Verifying local archive...", Path.GetFileName(local[i]));
+                try { verifiedHashes[i] = VerifyLocal(local[i], plans[i]); }
+                catch { File.Delete(local[i]); throw; }
+            }
+            for (int i = 0; i < 2; i++)
+            {
+                checkDrive();
+                Report(80 + i * 8, "Copying and verifying USB...", Path.GetFileName(local[i]));
+                await Transfer.CopyAndVerifyAsync(local[i], temporary[i], format, DiagnosticLog, checkDrive, verifiedHashes[i]);
+            }
             checkDrive();
-            RejectLinks(path);
-            File.Delete(path); // Only these two literal filenames; no wildcards or recursive deletion.
+            Report(97, "Finalizing backup...");
+            Commit(paths, temporary, id);
+            Report(100, "Backup Complete", "Both folders are saved. You can eject the USB.");
         }
-        Report(10, "Preparing new archives...");
-        if (freeBytes() < estimate) throw new IOException("The USB does not have enough free space for the new backup.");
-
-        for (int i = 0; i < 2; i++)
+        finally
         {
-            checkDrive();
-            int index = i;
-            string stage = $"Compressing Folder {(i == 0 ? "A" : "B")}...";
-            Report(i == 0 ? 10 : 45, stage);
-            await CreateZipAsync(plans[i], paths[i], checkDrive, (ratio, file) =>
-                Report((index == 0 ? 10 : 45) + 35 * ratio, stage, file));
+            foreach (string path in temporary)
+                try { checkDrive(); RejectLinks(path); File.Delete(path); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                { DiagnosticLog(new TransferDiagnostics { ArchiveName = Path.GetFileName(path), Result = "Temporary cleanup failed", Errors = { e.ToString() } }); }
         }
-        Report(80, "Finishing...", "Checking both ZIP archives");
-        for (int i = 0; i < 2; i++)
-        {
-            checkDrive();
-            RejectLinks(paths[i]);
-            if (new FileInfo(paths[i]).Length == 0) throw new InvalidDataException("An archive is empty.");
-            using var zip = ZipFile.OpenRead(paths[i]);
-            if (zip.Entries.Count != Math.Max(1, plans[i].Entries.Count)) throw new InvalidDataException("The ZIP directory is incomplete.");
-            Report(80 + (i + 1) * 9, "Finishing...", $"Folder{(i == 0 ? "A" : "B")}.zip checked");
-        }
-        checkDrive();
-        Report(100, "Backup Complete", "Both folders are saved. You can eject the USB.");
     }
 
+    private static string VerifyLocal(string path, SourcePlan plan)
+    {
+        var diagnostic = new TransferDiagnostics();
+        ArchiveTransfer.DiagnoseZip(path, diagnostic);
+        if (diagnostic.FullEntryValidationPassed != true) throw new InvalidDataException("Local ZIP validation failed: " + string.Join("; ", diagnostic.Errors));
+        using var zip = ZipFile.OpenRead(path);
+        if (zip.Entries.Count != Math.Max(1, plan.Entries.Count)) throw new InvalidDataException("Local ZIP entry count differs from source.");
+        foreach (var item in plan.Entries)
+        {
+            var entry = zip.GetEntry(item.Name + (item.IsDirectory ? "/" : "")) ?? throw new InvalidDataException("Local ZIP entry missing.");
+            if (item.IsDirectory) continue;
+            RejectLinks(item.Path);
+            using var source = new FileStream(item.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var archived = entry.Open();
+            if (source.Length != item.Bytes || File.GetLastWriteTimeUtc(item.Path) != item.Modified ||
+                !System.Security.Cryptography.SHA256.HashData(source).SequenceEqual(System.Security.Cryptography.SHA256.HashData(archived)) ||
+                File.GetLastWriteTimeUtc(item.Path) != item.Modified)
+                throw new IOException("Source changed during backup. Close editing apps and try again.");
+        }
+        var current = Scan(plan.Root);
+        if (!current.Entries.OrderBy(x => x.Name).SequenceEqual(plan.Entries.OrderBy(x => x.Name)))
+            throw new IOException("Source changed during backup. Close editing apps and try again.");
+        using var verified = File.OpenRead(path);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(verified));
+    }
+
+    private static void Commit(string[] paths, string[] temporary, string id)
+    {
+        string[] old = paths.Select(p => p + ".old-" + id).ToArray();
+        bool[] saved = new bool[2], installed = new bool[2];
+        try
+        {
+            for (int i = 0; i < 2; i++)
+            {
+                RejectLinks(paths[i]);
+                if (File.Exists(paths[i])) { File.Move(paths[i], old[i]); saved[i] = true; }
+            }
+            for (int i = 0; i < 2; i++) { File.Move(temporary[i], paths[i]); installed[i] = true; }
+        }
+        catch (Exception commitError)
+        {
+            var errors = new List<Exception> { commitError };
+            for (int i = 1; i >= 0; i--)
+                try
+                {
+                    if (installed[i]) File.Delete(paths[i]);
+                    if (saved[i]) File.Move(old[i], paths[i]);
+                }
+                catch (Exception e) { errors.Add(e); }
+            throw new IOException("USB replacement failed. Previous backups were restored where possible; recovery copies have .old- names. View diagnostics.", new AggregateException(errors));
+        }
+        // Cleanup cannot roll back a successfully installed set after one old copy has been removed.
+        foreach (string path in old)
+            try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
     public static SourcePlan Scan(string root)
     {
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) throw new DirectoryNotFoundException($"Source folder not found: {root}");

@@ -55,6 +55,25 @@ public static class UsbService
             && bytes >= 32 && BitConverter.ToInt32(descriptor, 28) == 7; // BusTypeUsb
     }
 
+    public static string GetModel(string root)
+    {
+        using var handle = NativeStorage.Open(@"\\.\" + root.TrimEnd('\\'));
+        if (handle.IsInvalid) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        byte[] descriptor = new byte[4096];
+        if (!NativeStorage.DeviceIoControl(handle, 0x2D1400, new byte[12], 12, descriptor, descriptor.Length, out int bytes, IntPtr.Zero))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        string Field(int position)
+        {
+            if (bytes < position + 4) return "";
+            int offset = BitConverter.ToInt32(descriptor, position);
+            if (offset <= 0 || offset >= bytes) return "";
+            int end = Array.IndexOf(descriptor, (byte)0, offset, bytes - offset);
+            return Encoding.ASCII.GetString(descriptor, offset, (end < 0 ? bytes : end) - offset).Trim();
+        }
+        string model = string.Join(" ", new[] { Field(12), Field(16), Field(20) }.Where(x => x.Length > 0));
+        return model.Length == 0 ? "Unavailable: Windows returned no vendor/product/revision" : model;
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "GetVolumeNameForVolumeMountPointW")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetVolumeNameForVolumeMountPoint(string mountPoint, StringBuilder volumeName, int bufferLength);
